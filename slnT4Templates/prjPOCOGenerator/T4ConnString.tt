@@ -1,0 +1,8 @@
+﻿<#@ IntelliSenseLanguage processor="tangibleT4Editor" language="C#" #>
+<#+ 
+  string getConnectionString(){			
+	  string cstr= @"Data Source=.\SQL2K16DEV;Initial Catalog=TaiwanDB;Application Name=Mywebapi;Trusted_Connection=True";
+	  //Data Source=.\SQL2K16DEV;Initial Catalog=TaiwanDB;User ID=sa;Password=1111;Application Name=Mywebapi
+	  return cstr;
+	}	
+#>

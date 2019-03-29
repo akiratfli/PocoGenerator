@@ -1,0 +1,92 @@
+﻿<#@ template debug="true" hostspecific="true" language="C#" #>
+<#@ assembly name="System.Core" #><##>
+<#@ assembly name="System.Data" #><##>
+<#@ assembly name="System.xml" #><##>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #><##>
+<#@ import namespace="System.Text" #><##>
+<#@ import namespace="System.Collections.Generic" #><##>
+<#@ import namespace="System.Data.SqlClient" #><##>
+<#@ import namespace="System.Data" #><##>
+<#@ import namespace="System.Data.Common" #><##>
+<#@ import namespace="Microsoft.CSharp" #><##>
+<#@ output extension=".cs" #><##>
+<# /*引入typeMapping*/ #><##>
+<#@ include file=".\T4TypeMapping.tt" #><##>
+<# /*引入connetion string*/ #><##>
+<#@ include file=".\T4ConnString.tt" #><##>
+<# /*引入Helpers 方法*/ #><##>
+<#@ include file=".\T4Helper.tt" #><##>
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace TaiwanDbAPI.Domain
+{
+<#  
+	string destinationFolder = "PocoFolder";
+	SqlConnection conn = new SqlConnection(getConnectionString()); 
+    conn.Open();
+    DataTable dtTableDescs= GetDataTable(getMetaSqlInstruction());
+    DataTable dtTableColumnDatatype=GetDataTable(getColumnInfoMetaSqlInstruction());
+    //如果需要database中全部table，則使用conn.GetSchema("Tables")即可
+    //string[] restrictions = new string[4];
+    //restrictions[1] = "dbo";
+    //修改table名稱
+    //restrictions[2] = "你的Table名稱";
+    DataTable dtSchema=conn.GetSchema("Tables");	// conn.GetSchema("Tables",restrictions);
+    string selectQuery = @"select top(1) * from  {tableName} WITH(nolock);";  
+    SqlCommand command = new SqlCommand(selectQuery,conn);
+    SqlDataAdapter ad = new SqlDataAdapter(command); 
+    System.Data.DataSet ds = new DataSet(); 
+    foreach(System.Data.DataRow row in dtSchema.Rows) 
+    { 
+		string tableName=row["TABLE_NAME"].ToString().Trim();
+		string tableSchema=row["TABLE_SCHEMA"].ToString().Trim();
+		string tableNameWithSchema=tableSchema+".["+tableName+"]";
+
+		string tableDesc="";
+		bool hasTableDesc=false;
+		//處理取得table的說明
+		hasTableDesc= TryGetDescription(ref dtTableDescs,tableName,tableSchema,"",out tableDesc);
+		//這樣寫是為了不要在hasTableDesc==false時輸出空白
+		if(hasTableDesc){
+		#><#= "//"+tableDesc #>
+	   <# } #>
+	   [Table("<#= tableName #>", Schema = "<#= tableSchema #>")]
+	   public partial class <#= ReplaceInvalidCharacter(tableName) #>
+	   {
+<#		//loop schema之每個metadata
+		command.CommandText = selectQuery.Replace("{tableName}",tableNameWithSchema); 
+        ad.FillSchema(ds, SchemaType.Mapped,tableNameWithSchema);
+        DataTable curTable=ds.Tables[tableNameWithSchema];
+        foreach (DataColumn dc in curTable.Columns)
+        {
+			string propertyType=TypeAliases[dc.DataType];
+			bool isNullable = dc.AllowDBNull;
+			bool isPrimary = curTable.PrimaryKey.Contains(dc);
+			if (isNullable && propertyType != "string" && dc.DataType.IsArray==false)
+			{
+				propertyType += "?";
+			}
+			string columnDesc="";
+			string columnDataTypeDesc="";
+			bool hasColumnDesc=false;
+			TryGetDescription(ref dtTableColumnDatatype,tableName,tableSchema,dc.ColumnName,out columnDataTypeDesc);
+			hasColumnDesc= TryGetDescription(ref dtTableDescs,tableName,tableSchema,dc.ColumnName,out columnDesc);
+			#>	<# if(hasColumnDesc && !string.IsNullOrEmpty(columnDesc)){ #>
+		<#="//"+columnDesc.Replace("\r\n"," ")+""#>
+		<# } #>
+		<# if(isPrimary==true) {#>
+		<#="[Key][Required]" #>
+		<# } #>
+		public <#= propertyType #> <#= ReplaceInvalidCharacter(dc.ColumnName) #> { get; set; }  <#= "//"+columnDataTypeDesc#>
+
+      <#}#>
+		}
+<#
+        
+}#>
+}

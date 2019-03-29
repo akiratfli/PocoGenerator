@@ -1,0 +1,133 @@
+﻿<#@ template language="C#" #>
+<#@ assembly name="System.Core" #>
+<#@ assembly name="System.Data" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="Microsoft.SqlServer.Smo" #>
+<#@ assembly name="Microsoft.SqlServer.ConnectionInfo" #>
+<#@ assembly name="Microsoft.SqlServer.Management.Sdk.Sfc" #>
+<#@ import namespace="System" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Text.RegularExpressions" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="Microsoft.SqlServer.Management.Smo" #>
+<#+
+//取得c# type之alias(此方法在處理nullable type時，會無法正確的轉出來)
+public string GetAlias(Type t)
+{
+    string typeName = "";
+    using (var provider = new CSharpCodeProvider())
+    {
+        var typeRef = new System.CodeDom.CodeTypeReference(t);
+        typeName = provider.GetTypeOutput(typeRef);
+    }
+    return typeName;
+}
+//取得sql語句執行後的DataTable
+public DataTable GetDataTable(string sql)
+{
+	DataSet ds = new DataSet(); 
+	using(SqlConnection conn = new SqlConnection(getConnectionString()))
+	{
+		conn.Open();
+		using(SqlCommand cmd = new SqlCommand(sql, conn))
+		{
+			using(SqlDataAdapter da = new SqlDataAdapter(cmd))
+			{
+				da.Fill(ds);
+			}
+		}
+		
+	};        
+	return ds.Tables[0];   
+}
+
+//取得table與column之單一描述說明
+public bool TryGetDescription(ref DataTable dtTableDescs,string tableName,string tableSchema,string columnName, out string desc){
+        DataRow[] drs= dtTableDescs.Select("[table_name]='"+tableName+"'"+
+									 " AND [schema_name]='"+tableSchema+"'"+
+									 " AND [table_column_name]='"+columnName+"'");
+        desc="";
+        if(drs.Length==1){
+            desc= drs[0]["desc"].ToString();
+            return true;
+        }
+        return false;
+}
+
+public void SaveOutput(string outputFileName, string destinationFolder)
+{
+    // Write to destination folder
+    string templateDirectory = Path.Combine(Path.GetDirectoryName(Host.TemplateFile), destinationFolder);
+    string outputFilePath = Path.Combine(templateDirectory, outputFileName);
+	if(Directory.Exists(templateDirectory)==false)
+		Directory.CreateDirectory(templateDirectory);
+    File.Delete(outputFilePath);
+    File.WriteAllText(outputFilePath, this.GenerationEnvironment.ToString()); 
+    // Flush generation
+    this.GenerationEnvironment.Remove(0, this.GenerationEnvironment.Length);
+}
+
+
+//取得table、schema、column組合後之中繼說明描述資料sql
+public string getMetaSqlInstruction(){
+  return @"SELECT	 t.name AS [table_name],
+  sc.name [schema_name],
+  '' AS [table_column_name],
+        td.value AS [desc]
+        FROM   sys.objects t WITH(nolock)
+        INNER JOIN sys.extended_properties td WITH(nolock)
+        ON		(td.major_id = t.object_id
+        AND 	td.minor_id =0
+        AND		td.name = 'MS_Description')
+        INNER JOIN sys.schemas sc WITH(nolock)
+        ON (sc.schema_id=t.schema_id)
+		WHERE t.type = 'u'
+union
+ SELECT	 t.name AS [table_name],
+  sc.name [schema_name],
+  c.name AS [table_column_name],
+        td.value AS [table_desc]
+        FROM   sys.objects t WITH(nolock)
+		INNER JOIN sys.columns c WITH(nolock)
+		ON( c.object_id=t.object_id)
+        LEFT JOIN sys.extended_properties td WITH(nolock)
+        ON		(td.major_id = c.object_id
+        AND 	td.minor_id =c.column_id
+        AND		td.name = 'MS_Description')
+        INNER JOIN sys.schemas sc WITH(nolock)
+        ON (sc.schema_id=t.schema_id)
+		WHERE t.type = 'u';
+        ";
+
+}
+
+//取得table、schema、column組合後之中繼db type描述資料sql
+public string getColumnInfoMetaSqlInstruction(){
+        return @"SELECT dt.TABLE_NAME,dt.TABLE_SCHEMA  as [schema_name],dt.COLUMN_NAME AS [table_column_name],CONCAT(dt.Declaration_Type, IIF(dt.Nullable='NULL',', null',', not null')) AS [desc] FROM (
+SELECT
+    TABLE_NAME, 
+    COLUMN_NAME,
+    DATA_TYPE
+        + CASE WHEN DATA_TYPE IN ('char','nchar','varchar','nvarchar','binary','varbinary')
+                    AND CHARACTER_MAXIMUM_LENGTH > 0 THEN
+                 COALESCE('('+CONVERT(varchar,CHARACTER_MAXIMUM_LENGTH)+')','')
+            ELSE '' END
+        + CASE WHEN DATA_TYPE IN ('decimal','numeric') THEN
+                COALESCE('('+CONVERT(varchar,NUMERIC_PRECISION)+','+CONVERT(varchar,NUMERIC_SCALE)+')','')
+            ELSE '' END
+        AS Declaration_Type,
+    CASE WHEN IS_NULLABLE='NO' THEN 'NOT ' ELSE '' END + 'NULL' AS Nullable
+	,TABLE_SCHEMA
+FROM INFORMATION_SCHEMA.COLUMNS
+) dt
+ORDER BY 1,2
+";
+}
+
+public string ReplaceInvalidCharacter(string str){
+	return  Regex.Replace(str,"\"|\'|‘|’|“|”|<|>|\\(|\\)|#|\\$|/|\\.|\\[|\\]\\|\\^", "_");
+}
+
+#>
